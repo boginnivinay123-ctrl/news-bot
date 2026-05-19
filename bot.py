@@ -8,7 +8,7 @@ on:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-
+"https://hooks.slack.com/services/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"
     permissions:
       contents: write 
 
