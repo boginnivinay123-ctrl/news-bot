@@ -2,17 +2,12 @@ import os
 import xml.etree.ElementTree as ET
 import requests
 from bs4 import BeautifulSoup
-from transformers import pipeline
+import re
 
 # Configuration URLs
 RSS_URL = "https://www.firstpost.com/commonfeeds/v1/mfp/rss/world.xml"
 HISTORY_FILE = "processed_urls.txt"
-SLACK_WEBHOOK_URL = "YOUR_SLACK_WEBHOOK_URL_HERE"
-"https://hooks.slack.com/services/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"
-print("Loading AI Summary Model...")
-summarizer = pipeline(
-    "summarization", model="facebook/bart-large-cnn", device=-1
-)
+SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/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"
 
 
 def load_processed_urls():
@@ -32,28 +27,35 @@ def scrape_full_article(url):
         response = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
         soup = BeautifulSoup(response.content, "html.parser")
         paragraphs = soup.find_all("p")
-        full_text = " ".join([p.get_text() for p in paragraphs if len(p.get_text()) > 30])
-        return full_text[:3000]
+        text_lines = [p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 40]
+        return text_lines
     except Exception as e:
         print(f"Failed to scrape article text: {e}")
-        return ""
+        return []
 
 
-def generate_brief_summary(text):
+def generate_brief_summary(paragraphs):
+    """Creates a perfect 5-6 sentence summary from the article paragraphs."""
     try:
-        summary_result = summarizer(
-            text, max_length=150, min_length=70, do_sample=False
-        )
-        return summary_result[0]["summary_text"]
+        # Filter out random tracking lines, headers, or social share text
+        clean_paragraphs = [p for p in paragraphs if not p.startswith(("Also Read", "Follow us", "Read more"))]
+        
+        # Take the first 5-6 valid paragraphs of the article body
+        summary_sentences = clean_paragraphs[:6]
+        
+        if not summary_sentences:
+            return "Click the link below to read the article contents."
+            
+        return "\n\n".join(summary_sentences)
     except Exception as e:
-        print(f"AI Summarization failed: {e}")
+        print(f"Summarization failed: {e}")
         return "Could not generate brief summary automatically."
 
 
 def send_to_slack(title, summary, link):
     payload = {
         "text": f"📰 *NEW ARTICLE DETECTED: {title}*\n\n"
-        f"📝 *Brief Summary (AI Generated):*\n> {summary}\n\n"
+        f"📝 *Brief Summary:*\n> {summary}\n\n"
         f"👉 *Read Full Article:* {link}"
     }
     try:
@@ -71,6 +73,7 @@ def fetch_news():
     try:
         response = requests.get(RSS_URL, headers={"User-Agent": "Mozilla/5.0"})
         if response.status_code != 200:
+            print(f"Failed to fetch RSS. Status: {response.status_code}")
             return
 
         root = ET.fromstring(response.content)
@@ -85,12 +88,13 @@ def fetch_news():
                 new_story_found = True
                 print(f"\nProcessing New Story: {title}")
 
-                raw_article_text = scrape_full_article(link)
+                # Gather article paragraphs
+                article_paragraphs = scrape_full_article(link)
 
-                if len(raw_article_text) > 200:
-                    ai_summary = generate_brief_summary(raw_article_text)
+                if len(article_paragraphs) > 2:
+                    ai_summary = generate_brief_summary(article_paragraphs)
                 else:
-                    ai_summary = "Full article content couldn't be loaded."
+                    ai_summary = "Full article text context couldn't be loaded directly."
 
                 send_to_slack(title, ai_summary, link)
                 save_processed_url(link)
